@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  web:
+    build:
+      context: ./app
+      dockerfile: Dockerfile.prod
+    command: gunicorn hello_django.wsgi:application --bind 0.0.0.0:8000
+    # serving static file
+    volumes:
+      - static_volume:/home/app/web/staticfiles
+      - media_volume:/home/app/web/mediafiles
+    # ports:
+    #   - 8000:8000
+    # Now, port "8000" is only exposed internally, to other Docker services.
+    # The port will no longer be published to the host machine.
+    expose: # because of nginx
+      - 8000
+    env_file:
+      - ./.env.prod
+    depends_on:
+      - db
+  db:
+    image: postgres:15
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    env_file:
+      - ./.env.prod.db
+  nginx:
+    build: ./nginx
+    # serving static file
+    volumes:
+      - static_volume:/home/app/web/staticfiles
+      - media_volume:/home/app/web/mediafiles
+    ports:
+      - 1337:80
+    depends_on:
+      - web
+
+volumes:
+  postgres_data:
+  static_volume:
+  media_volume:

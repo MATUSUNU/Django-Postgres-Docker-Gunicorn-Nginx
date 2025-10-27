@@ -1,0 +1,110 @@
+
+###########
+# BUILDER #
+###########
+# This stage prepares everything needed to run your app
+
+# pull official base image  [Use the Python image that's built on Debian Buster/Bullseye as the base]
+# FROM python:3.11.4-slim-buster as builder
+# FROM python:3.11.4-slim-bookworm as builder
+FROM python:3.11.5-slim-bullseye as builder
+# FROM --platform=linux/amd64 python:3.11.4-slim-bookworm as builder
+
+# set work directory
+WORKDIR /usr/src/app
+
+# set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# install system dependencies  [Executes a command while building the image]
+# gcc for compiling Python packages
+RUN apt-get update && \
+  apt-get install -y --no-install-recommends gcc
+
+# lint
+RUN pip install --upgrade pip
+RUN pip install flake8==6.0.0
+COPY . /usr/src/app/
+# runs linting (ignoring line length and unused imports)
+# RUN flake8 --ignore=E501,F401 .
+RUN flake8 --ignore=E501,F401,W503,W504,E261 --exclude=env,migrations,__pycache__ .
+
+# install python dependencies
+COPY ./requirements.txt .
+RUN pip wheel --no-cache-dir --no-deps --wheel-dir /usr/src/app/wheels -r requirements.txt
+# "pip wheel": Instead of installing packages, this builds wheel files — precompiled Python packages.
+## - Pip skips downloading and compiling  [e.g. pip install psycopg2-2.9.9-cp311-cp311-linux_x86_64.whl]
+## - It just unzips and installs — super fast!
+
+# "--no-cache-dir": Avoids storing pip cache (saves space).
+# "--no-deps": Only builds wheels for packages listed in requirements.txt, not their dependencies.
+# "--wheel-dir /usr/src/app/wheels": Saves the wheel files into that directory.
+# "-r requirements.txt": Reads the list of packages from your requirements file.
+
+# without "wheel":
+## - Pip downloads the source code  [e.g. pip install psycopg2]
+## - Then it "compiles"(turn "human-readable" code into "machine-readable" instructions) it (needs gcc, libpq-dev, etc.)
+## - This takes time and system resources
+
+
+#########
+# FINAL #
+#########
+# This is the image that actually runs your Django app in production.
+
+# pull official base image  [Use the Python image that's built on Debian Buster/Bullseye as the base]
+# FROM python:3.11.4-slim-buster
+# FROM python:3.11.4-slim-bookworm
+FROM python:3.11.5-slim-bullseye
+# FROM --platform=linux/amd64 python:3.11.4-slim-bookworm
+
+# create directory for the app user  [Creates a home directory for a "non-root" user]
+## Executes a command while building the image.
+RUN mkdir -p /home/app
+
+# create the app user  [Adds a system-level "user" and "group" called "app"]
+## system-level  [Created for internal use, not for logging in]  [Doesn’t have a password or shell access]
+## same name("app")  [keeps things simple and clear]  ["django_user" and "web_group" is possible]
+RUN addgroup --system app && adduser --system --group app
+
+# create the appropriate directories
+# Sets environment variables for "home" and "app" paths.
+# Creates /home/app/web and sets it as the working directory.
+## [Some tools (like pip, Python, or logs) might use "$HOME" to store "config or cache"]  [it’s harmless but not essential]
+ENV HOME=/home/app
+ENV APP_HOME=/home/app/web
+RUN mkdir $APP_HOME
+# serving static
+RUN mkdir $APP_HOME/staticfiles
+RUN mkdir $APP_HOME/mediafiles
+# Sets the current folder for all future commands  [From now on, pretend we’re inside /home/app/web]
+WORKDIR $APP_HOME
+
+# install dependencies
+# Installs "netcat" (used in entrypoint.prod.sh to wait for Postgres)  [--no-install-recommends keeps the image lean]
+# RUN apt-get update && apt-get install -y --no-install-recommends netcat
+RUN apt-get update && apt-get install -y --no-install-recommends netcat-traditional
+# Copies prebuilt wheel files and requirements.txt from Stage 1 (builder).
+COPY --from=builder /usr/src/app/wheels /wheels
+COPY --from=builder /usr/src/app/requirements.txt .
+# Installs all packages from the wheel directory — fast and clean.
+RUN pip install --upgrade pip
+RUN pip install --no-cache /wheels/*
+
+# copy entrypoint.prod.sh  [Makes the script executable]
+COPY ./entrypoint.prod.sh .
+RUN sed -i 's/\r$//g'  $APP_HOME/entrypoint.prod.sh
+RUN chmod +x  $APP_HOME/entrypoint.prod.sh
+
+# copy project  [Copies your full Django project into the container]
+COPY . $APP_HOME
+
+# chown all the files to the app user  [Changes "ownership" of all files to the app user]
+RUN chown -R app:app $APP_HOME
+
+# change to the app user  [Switches to the app user for all remaining steps]  [Improves container security]
+USER app
+
+# run entrypoint.prod.sh
+ENTRYPOINT ["/home/app/web/entrypoint.prod.sh"]
