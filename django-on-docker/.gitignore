@@ -62,6 +62,11 @@ local_settings.py
 db.sqlite3
 db.sqlite3-journal
 
+# Django media and static
+/media/
+staticfiles/
+uploads/
+
 # Flask stuff:
 instance/
 .webassets-cache
